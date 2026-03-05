@@ -202,15 +202,15 @@ def write_dss1red_title(tile_dir: Path, row: TilePlateRow, *, prefer_local_heade
         src_rel = row.irsa_filename or row.tile_fits or ''
 
     content_lines = [
-        f'PLTLABEL: {row.irsa_platelabel}'+"\n",
-        f'PLATEID: {row.irsa_plateid}'+"\n",
-        f'REGION: {row.plate_id}'+"\n",
-        f'DATE-OBS: {row.irsa_date_obs or row.tile_date_obs}'+"\n",
-        f'FITS: {row.irsa_filename or row.tile_fits}'+"\n",
-        f'SOURCE: {src_rel}'+"\n",
-        f'SEP_DEG: {row.irsa_center_sep_deg}'+"\n",
+        f'PLTLABEL: {row.irsa_platelabel}',
+        f'PLATEID: {row.irsa_plateid}',
+        f'REGION: {row.plate_id}',
+        f'DATE-OBS: {row.irsa_date_obs or row.tile_date_obs}',
+        f'FITS: {row.irsa_filename or row.tile_fits}',
+        f'SOURCE: {src_rel}',
+        f'SEP_DEG: {row.irsa_center_sep_deg}',
     ]
-    title_path.write_text(''.join(content_lines) + '', encoding='utf-8')
+    title_path.write_text("\n".join(content_lines) + '\n', encoding='utf-8', newline="\n")
     return title_path
 
 
