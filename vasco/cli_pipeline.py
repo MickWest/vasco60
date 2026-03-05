@@ -718,26 +718,6 @@ def cmd_one(args: argparse.Namespace) -> int:
         )
         # Enforce POSSI-E post-promotion; may unlink & raise if not POSSI-E
         _enforce_possi_e_or_skip(Path(fits), lg)
-        # ---- vasco60 metadata maintenance (no separate post-step scripts) ----
-        try:
-            # data root is repo-root ./data (symlink) by default
-            data_root = Path('./data')
-            info = update_all_after_download(
-                tile_dir=run_dir,
-                fits_path=Path(fits),
-                tile_id=run_dir.name,
-                ra_deg=float(ra),
-                dec_deg=float(dec),
-                survey=str(args.survey),
-                size_arcmin=float(args.size_arcmin),
-                pixel_scale_arcsec=float(args.pixel_scale_arcsec),
-                data_root=data_root,
-                prefer_local_header=True,
-            )
-            print('[STEP1][META]', run_dir.name, 'plate_id=', info.get('plate_id',''),
-                  '->', Path(info.get('tile_to_plate_csv','')).name)
-        except Exception as _e:
-            print('[STEP1][WARN] metadata update failed:', _e)
     except RuntimeError as e:
         # Non-POSS enforcement path keeps your original bookkeeping — but only
         # write RUN_* artifacts if the tile folder already exists.
@@ -1725,6 +1705,25 @@ def cmd_step1_download(args: argparse.Namespace) -> int:
         )
         # POSSI‑E enforcement (may delete and raise)
         _enforce_possi_e_or_skip(Path(fits), lg)
+        # ---- vasco60 metadata maintenance (no separate post-step scripts) ----
+        try:
+            data_root = Path('./data')  # repo-root symlink to dataset root
+            info = update_all_after_download(
+                tile_dir=run_dir,
+                fits_path=Path(fits),
+                tile_id=run_dir.name,
+                ra_deg=float(ra),
+                dec_deg=float(dec),
+                survey=str(args.survey),
+                size_arcmin=float(args.size_arcmin),
+                pixel_scale_arcsec=float(args.pixel_scale_arcsec),
+                data_root=data_root,
+                prefer_local_header=True,
+            )
+            print('[STEP1][META]', run_dir.name, 'plate_id=', info.get('plate_id',''),
+                  '->', Path(info.get('tile_to_plate_csv','')).name)
+        except Exception as _e:
+            print('[STEP1][WARN] metadata update failed:', _e)
 
         # ---- SUCCESS PATH ----
         print('[STEP1] Downloaded FITS ->', fits)

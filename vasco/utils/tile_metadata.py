@@ -3,19 +3,16 @@
 
 Utilities to keep dataset metadata up to date *during* Step1-download.
 
-Goal: retire separate post-download scripts that were previously required to:
-  A) maintain data/metadata/tile_to_plate.csv (tile -> plate_id/REGION mapping)
+Retires separate post-download scripts that were previously required to:
+  A) maintain data/metadata/tile_to_plate.csv (tile -> plate_id/REGION)
   B) write per-tile raw/dss1red_title.txt sidecar
   C) maintain data/metadata/tiles_registry.csv
-
-This module is called from the pipeline Step1-download success path.
 
 Notes
 -----
 - plate_id is frozen to FITS header REGION.
-- The FITS header JSON sidecar written by Step1 includes a full header dump.
-  We prefer reading REGION/PLTLABEL/PLATEID/DATE-OBS from that JSON to avoid
-  reopening FITS files.
+- We read REGION/PLTLABEL/PLATEID/DATE-OBS from the local FITS header JSON sidecar
+  written next to the FITS by Step1.
 """
 
 from __future__ import annotations
@@ -23,7 +20,6 @@ from __future__ import annotations
 import csv
 import json
 import os
-import platform
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -73,12 +69,6 @@ def _unlock(fp):
 
 
 def _read_header_sidecar(fits_path: Path) -> Tuple[dict, Optional[Path]]:
-    """Read the FITS header JSON sidecar written next to the FITS.
-
-    The sidecar format in cli_pipeline.py is:
-      { 'fits_file': ..., 'selected': {...}, 'header': {...} }
-    We return the merged header dict and the sidecar path.
-    """
     sidecar = fits_path.with_suffix(fits_path.suffix + '.header.json')
     if not sidecar.exists() or sidecar.stat().st_size == 0:
         return {}, None
@@ -100,7 +90,6 @@ def ensure_metadata_dirs(data_root: Path) -> Path:
 
 
 def update_tile_to_plate_csv(meta_dir: Path, row: TilePlateRow, filename: str = 'tile_to_plate.csv') -> Path:
-    """Upsert a row into tile_to_plate.csv keyed by tile_id."""
     out = meta_dir / filename
     fieldnames = [
         'tile_id', 'plate_id', 'tile_region', 'tile_survey', 'tile_date_obs', 'tile_fits',
@@ -136,7 +125,6 @@ def update_tile_to_plate_csv(meta_dir: Path, row: TilePlateRow, filename: str = 
         'irsa_center_sep_deg': row.irsa_center_sep_deg,
     }
 
-    # Write atomically-ish (rewrite whole file under lock)
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(out.suffix + '.tmp')
     with tmp.open('w', newline='', encoding='utf-8') as f:
@@ -153,7 +141,6 @@ def update_tile_to_plate_csv(meta_dir: Path, row: TilePlateRow, filename: str = 
 def update_tiles_registry(meta_dir: Path, *, tile_id: str, ra_deg: float, dec_deg: float,
                           survey: str, size_arcmin: float, pixel_scale_arcsec: float,
                           status: str = 'ok', source: str = 'step1-download', notes: str = '') -> Path:
-    """Upsert into tiles_registry.csv keyed by tile_id."""
     out = meta_dir / 'tiles_registry.csv'
     fieldnames = [
         'tile_id','ra_deg','dec_deg','survey','size_arcmin','pixel_scale_arcsec',
@@ -198,18 +185,6 @@ def update_tiles_registry(meta_dir: Path, *, tile_id: str, ra_deg: float, dec_de
 
 
 def write_dss1red_title(tile_dir: Path, row: TilePlateRow, *, prefer_local_header: bool = True) -> Path:
-    """Write <tile>/raw/dss1red_title.txt (best-effort).
-
-    We keep the same key lines as the legacy helper:
-      PLTLABEL, PLATEID, REGION, DATE-OBS, FITS, SOURCE, SEP_DEG
-
-    SOURCE preference:
-      1) local <tile>/raw/<tile_fits>.header.json (if prefer_local_header)
-      2) fallback to FITS basename
-
-    We intentionally avoid pointing SOURCE to repo-internal header paths because in vasco60
-    headers now live under data/metadata (gitignored) and absolute paths are undesirable.
-    """
     raw = tile_dir / 'raw'
     raw.mkdir(parents=True, exist_ok=True)
     title_path = raw / 'dss1red_title.txt'
@@ -234,7 +209,9 @@ def write_dss1red_title(tile_dir: Path, row: TilePlateRow, *, prefer_local_heade
         f'SOURCE: {src_rel}',
         f'SEP_DEG: {row.irsa_center_sep_deg}',
     ]
-    title_path.write_text(''.join(content_lines) + '', encoding='utf-8')
+    title_path.write_text('
+'.join(content_lines) + '
+', encoding='utf-8')
     return title_path
 
 
@@ -242,7 +219,6 @@ def update_all_after_download(*, tile_dir: Path, fits_path: Path, tile_id: str,
                               ra_deg: float, dec_deg: float, survey: str,
                               size_arcmin: float, pixel_scale_arcsec: float,
                               data_root: Path, prefer_local_header: bool = True) -> dict:
-    """Main entry point: update registry + mapping + title after a successful download."""
     hdr, sidecar = _read_header_sidecar(fits_path)
 
     region = str(hdr.get('REGION','') or '').strip()
