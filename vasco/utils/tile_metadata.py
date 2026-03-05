@@ -140,11 +140,11 @@ def update_tile_to_plate_csv(meta_dir: Path, row: TilePlateRow, filename: str = 
 
 def update_tiles_registry(meta_dir: Path, *, tile_id: str, ra_deg: float, dec_deg: float,
                           survey: str, size_arcmin: float, pixel_scale_arcsec: float,
-                          status: str = 'ok', source: str = 'step1-download', notes: str = '') -> Path:
+                          status: str = 'ok', source: str = 'step1-download', irsa_plateid, notes: str = '') -> Path:
     out = meta_dir / 'tiles_registry.csv'
     fieldnames = [
         'tile_id','ra_deg','dec_deg','survey','size_arcmin','pixel_scale_arcsec',
-        'status','downloaded_utc','source','notes'
+        'status','downloaded_utc','source', 'irsa_plateid', 'notes'
     ]
 
     rows: Dict[str, dict] = {}
@@ -168,6 +168,7 @@ def update_tiles_registry(meta_dir: Path, *, tile_id: str, ra_deg: float, dec_de
         'pixel_scale_arcsec': f'{float(pixel_scale_arcsec):.3f}',
         'status': status,
         'downloaded_utc': _utc_now_iso(),
+        'plate_id': irsa_plateid,
         'source': source,
         'notes': notes,
     }
@@ -209,7 +210,7 @@ def write_dss1red_title(tile_dir: Path, row: TilePlateRow, *, prefer_local_heade
         f'SOURCE: {src_rel}',
         f'SEP_DEG: {row.irsa_center_sep_deg}',
     ]
-    title_path.write_text(''.join(content_lines) + '', encoding='utf-8')
+    title_path.write_text(''.join(content_lines) + '\n', encoding='utf-8')
     return title_path
 
 
@@ -249,7 +250,8 @@ def update_all_after_download(*, tile_dir: Path, fits_path: Path, tile_id: str,
                                     size_arcmin=size_arcmin,
                                     pixel_scale_arcsec=pixel_scale_arcsec,
                                     status='ok',
-                                    source='step1-download')
+                                    source='step1-download',
+                                    irsa_plateid=plateid)
     out_title = write_dss1red_title(tile_dir, row, prefer_local_header=prefer_local_header)
 
     return {
