@@ -1,30 +1,75 @@
-# vasco/utils/tile_id.py
+# -*- coding: utf-8 -*-
+"""vasco.utils.tile_id
+
+Tile ID helpers.
+
+Supported tile directory naming schemes:
+
+1) New (vasco60):
+   - tile_RA130.013_DECp33.081   (Dec >= 0)
+   - tile_RA130.013_DECm33.081   (Dec < 0)
+
+2) Legacy (older vasco):
+   - tile-RA130.013-DEC+33.081
+   - tile-RA130.013-DEC-33.081
+
+The parser is intentionally tolerant and returns (ra, dec) normalized to:
+  ra in [0, 360)
+  dec in [-90, +90]
+
+This function is used by multiple modules (pipeline, wcsfix, tiles adapters).
+"""
+
 from __future__ import annotations
+
 import re
 from typing import Optional, Tuple
 
-# New: tile_RA130.013_DECp33.081  or  tile_RA130.013_DECm33.081
-_RE_NEW = re.compile(r"^tile_RA([0-9]+(?:\.[0-9]+)?)_DEC([pm])([0-9]+(?:\.[0-9]+)?)$")
+# New: tile_RA130.013_DECp33.081  /  tile_RA130.013_DECm33.081
+_RE_NEW = re.compile(r"^tile_RA(?P<ra>[0-9]+(?:\.[0-9]+)?)_DEC(?P<sign>[pm])(?P<dec>[0-9]+(?:\.[0-9]+)?)$")
 
-# Old: tile-RA130.013-DEC+33.081  or  tile-RA130.013-DEC-33.081
-_RE_OLD = re.compile(r"^tile-RA([0-9]+(?:\.[0-9]+)?)-DEC([+\-])([0-9]+(?:\.[0-9]+)?)$")
+# Legacy: tile-RA130.013-DEC+33.081  /  tile-RA130.013-DEC-33.081
+_RE_OLD = re.compile(r"^tile-RA(?P<ra>[0-9]+(?:\.[0-9]+)?)-DEC(?P<sign>[+\-])(?P<dec>[0-9]+(?:\.[0-9]+)?)$")
+
+
+def _norm_ra_dec(ra: float, dec: float) -> Tuple[float, float]:
+    ra = float(ra) % 360.0
+    dec = float(dec)
+    if dec > 90.0:
+        dec = 90.0
+    if dec < -90.0:
+        dec = -90.0
+    return ra, dec
+
 
 def parse_tile_id_center(tile_id: str) -> Optional[Tuple[float, float]]:
-    tile_id = (tile_id or "").strip()
-    m = _RE_NEW.match(tile_id)
-    if m:
-        ra = float(m.group(1))
-        sign = m.group(2)
-        dec_abs = float(m.group(3))
-        dec = dec_abs if sign == "p" else -dec_abs
-        return ra % 360.0, max(-90.0, min(90.0, dec))
+    """Parse (ra, dec) center from a tile directory name.
 
-    m = _RE_OLD.match(tile_id)
+    Returns None if the name doesn't match known schemes.
+    """
+    s = (tile_id or "").strip()
+
+    m = _RE_NEW.match(s)
     if m:
-        ra = float(m.group(1))
-        sign = m.group(2)
-        dec_abs = float(m.group(3))
-        dec = dec_abs if sign == "+" else -dec_abs
-        return ra % 360.0, max(-90.0, min(90.0, dec))
+        ra = float(m.group('ra'))
+        dec_abs = float(m.group('dec'))
+        sign = m.group('sign')
+        dec = dec_abs if sign == 'p' else -dec_abs
+        return _norm_ra_dec(ra, dec)
+
+    m = _RE_OLD.match(s)
+    if m:
+        ra = float(m.group('ra'))
+        dec_abs = float(m.group('dec'))
+        sign = m.group('sign')
+        dec = dec_abs if sign == '+' else -dec_abs
+        return _norm_ra_dec(ra, dec)
 
     return None
+
+
+def format_tile_id(ra_deg: float, dec_deg: float, ndp: int = 3) -> str:
+    """Format a tile_id in the new vasco60 naming style."""
+    ra, dec = _norm_ra_dec(ra_deg, dec_deg)
+    sign = 'p' if dec >= 0 else 'm'
+    return f"tile_RA{ra:.{ndp}f}_DEC{sign}{abs(dec):.{ndp}f}"

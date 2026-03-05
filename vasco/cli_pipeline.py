@@ -4,6 +4,7 @@ import argparse, json, time, subprocess, os, shutil, math
 from pathlib import Path
 from typing import List, Tuple
 import warnings
+from vasco.utils.tile_id import parse_tile_id_center
 
 # Silence pyerfa/ERFA warnings that clutter runs (must run before importing astropy/erfa)
 warnings.filterwarnings(
@@ -1310,14 +1311,7 @@ def _write_status_json(xdir: Path, status: dict) -> None:
         pass
 
 def _coords_from_tile_dirname(name: str) -> tuple[float, float] | None:
-    try:
-        if not name.startswith('tile-RA') or '-DEC' not in name:
-            return None
-        ra_part = name[len('tile-RA'): name.index('-DEC')]
-        dec_part = name[name.index('-DEC') + len('-DEC') :]
-        return float(ra_part), float(dec_part)
-    except Exception:
-        return None
+    return parse_tile_id_center(name)
 
 def _tile_center_from_index_or_name(run_dir: Path) -> tuple[float, float] | None:
     try:

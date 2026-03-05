@@ -21,11 +21,12 @@ Usage in scripts:
 import os, re, json, math, hashlib
 from dataclasses import dataclass
 from typing import Iterator, Optional, Tuple, List
+from vasco.utils.tile_id import parse_tile_id_center
 
 RA_KEYS  = ["RA_DEG", "CRVAL1", "RA", "OBJ_RA"]
 DEC_KEYS = ["DEC_DEG", "CRVAL2", "DEC", "OBJ_DEC"]
 
-# tileid like "tile-RA202.172-DEC+33.589"
+# tileid like "tile_RA202.172_DECp33.589" (vasco60) or legacy "tile-RA202.172-DEC+33.589"
 PAT_TILE_RADEC_A = re.compile(r"\bRA\s*([0-9]+(?:\.[0-9]+)?)\b.*?\bDEC\s*([+\-][0-9]+(?:\.[0-9]+)?)", re.I)
 # tileid like "RA150.000_dec+20.000" (order may vary)
 PAT_TILE_RADEC_B = re.compile(r"\bRA\s*([0-9]+(?:\.[0-9]+)?)\b.*?\bDEC\s*([+\-]?[0-9]+(?:\.[0-9]+)?)", re.I)
@@ -124,11 +125,11 @@ class TilesAdapter:
         return None
 
     def _parse_tileid_ra_dec(self, tile_id: str):
-        m = PAT_TILE_RADEC_A.search(tile_id)
-        if m: return self._norm_ra_dec(float(m.group(1)), float(m.group(2)))
-        m = PAT_TILE_RADEC_B.search(tile_id)
-        if m: return self._norm_ra_dec(float(m.group(1)), float(m.group(2)))
+        parsed = parse_tile_id_center(tile_id)
+        if parsed:
+            return parsed
         return None
+
 
     def _parse_fitsname_ra_dec(self, tile_path: str):
         raw_dir = os.path.join(tile_path, "raw")

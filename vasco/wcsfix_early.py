@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple, List
+from vasco.utils.tile_id import parse_tile_id_center
 
 import numpy as np
 
@@ -262,16 +263,8 @@ def ensure_wcsfix_catalog(tile_dir: Path,
 
     # Determine center if not provided
     if center is None:
-        # Try to parse from tile folder name: tile-RA259.267-DEC+51.582
-        name = tile_dir.name
-        try:
-            if name.startswith("tile-RA") and "-DEC" in name:
-                ra0 = float(name[len("tile-RA"): name.index("-DEC")])
-                dec0 = float(name[name.index("-DEC") + len("-DEC"):])
-                center = (ra0, dec0)
-        except Exception:
-            center = None
-
+        # Parse from tile folder name (supports both legacy and vasco60 naming)
+        center = parse_tile_id_center(tile_dir.name)
     if center is None:
         status.update({"ok": False, "reason": "missing tile center"})
         try:
