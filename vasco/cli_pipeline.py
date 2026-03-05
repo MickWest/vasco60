@@ -899,6 +899,115 @@ def _detect_radec_columns(csv_path: Path) -> Tuple[str, str] | None:
     except Exception:
         return None
 
+# NEW March 2026
+# circular filter
+
+def _wrap_deg_pm180(x: float) -> float:
+    return (x + 180.0) % 360.0 - 180.0
+
+def _sep_arcsec_haversine(ra1_deg: float, dec1_deg: float, ra2_deg: float, dec2_deg: float) -> float:
+    """Great-circle separation in arcsec, wrap-aware in RA."""
+    ra1 = math.radians(ra1_deg)
+    dec1 = math.radians(dec1_deg)
+    ra2 = math.radians(ra2_deg)
+    dec2 = math.radians(dec2_deg)
+
+    d_ra = math.radians(_wrap_deg_pm180(ra2_deg - ra1_deg))
+    d_dec = dec2 - dec1
+
+    a = math.sin(d_dec/2.0)**2 + math.cos(dec1) * math.cos(dec2) * math.sin(d_ra/2.0)**2
+    c = 2.0 * math.asin(min(1.0, math.sqrt(a)))
+    return math.degrees(c) * 3600.0
+
+def _circle_filter_csv_inplace(
+    csv_path: Path,
+    *,
+    center_ra_deg: float,
+    center_dec_deg: float,
+    radius_arcmin: float,
+    before_copy: Path,
+    status_json: Path,
+) -> None:
+    """
+    Filter csv_path to rows within radius_arcmin of center, overwriting csv_path.
+    Writes before_copy (once) and status_json marker.
+    Streaming implementation (does not load full CSV into memory).
+    """
+    radius_arcsec = float(radius_arcmin) * 60.0
+
+    # If already filtered with the same radius, skip
+    if status_json.exists():
+        try:
+            st = json.loads(status_json.read_text(encoding="utf-8"))
+            if float(st.get("radius_arcmin", -1)) == float(radius_arcmin) and st.get("state") == "done":
+                return
+        except Exception:
+            pass
+
+    # Preserve original square once
+    if (not before_copy.exists()) and csv_path.exists() and csv_path.stat().st_size > 0:
+        before_copy.write_bytes(csv_path.read_bytes())
+
+    # Detect RA/Dec columns from header (reuse your existing helper if you want)
+    with csv_path.open("r", newline="", encoding="utf-8", errors="ignore") as fi:
+        rdr = csv.reader(fi)
+        header = next(rdr, [])
+    cols = [h.strip().lstrip("﻿") for h in header]
+    colset = set(cols)
+
+    # Prefer corrected coords if present, else standard SExtractor RA/Dec
+    candidates = [
+        ("RA_corr", "Dec_corr"),
+        ("ALPHAWIN_J2000", "DELTAWIN_J2000"),
+        ("ALPHA_J2000", "DELTA_J2000"),
+        ("X_WORLD", "Y_WORLD"),
+    ]
+    ra_col = dec_col = None
+    for a, b in candidates:
+        if a in colset and b in colset:
+            ra_col, dec_col = a, b
+            break
+    if ra_col is None:
+        raise RuntimeError("circle filter: could not find RA/Dec columns in sextractor_pass2.csv")
+
+    tmp = csv_path.with_suffix(csv_path.suffix + ".circle.tmp")
+    kept = 0
+    seen = 0
+
+    with csv_path.open("r", newline="", encoding="utf-8", errors="ignore") as fi, \
+         tmp.open("w", newline="", encoding="utf-8") as fo:
+        dr = csv.DictReader(fi)
+        if not dr.fieldnames:
+            return
+        dw = csv.DictWriter(fo, fieldnames=dr.fieldnames)
+        dw.writeheader()
+
+        for row in dr:
+            seen += 1
+            try:
+                ra = float(row.get(ra_col, "nan"))
+                dec = float(row.get(dec_col, "nan"))
+                if not (math.isfinite(ra) and math.isfinite(dec)):
+                    continue
+                sep_arcsec = _sep_arcsec_haversine(center_ra_deg, center_dec_deg, ra, dec)
+                if sep_arcsec <= radius_arcsec:
+                    dw.writerow(row)
+                    kept += 1
+            except Exception:
+                continue
+
+    tmp.replace(csv_path)
+
+    status = {
+        "state": "done",
+        "radius_arcmin": float(radius_arcmin),
+        "center_ra_deg": float(center_ra_deg),
+        "center_dec_deg": float(center_dec_deg),
+        "rows_in": int(seen),
+        "rows_out": int(kept),
+    }
+    status_json.write_text(json.dumps(status, indent=2), encoding="utf-8")
+
 # UPDATED ensure: schema + rows aware
 
 def _ensure_sextractor_csv(tile_dir: Path, pass2_ldac: str | Path) -> Path:
@@ -1019,6 +1128,38 @@ def _post_xmatch_tile(tile_dir, pass2_ldac, *, radius_arcsec: float = 5.0) -> No
 
     # 1) Ensure base SExtractor CSV exists
     sex_csv = _ensure_sextractor_csv(tile_dir, pass2_ldac)
+    # 1b) Optional MNRAS-style circular cut at catalogue level (<= VASCO_CIRCLE_ARCMIN)
+    # Rationale: run SExtractor on a square cutout (e.g., 60x60) but keep only detections within a
+    # circular region (e.g., 30 arcmin radius) before any veto/xmatch.
+    try:
+        circle_arcmin = float(os.getenv('VASCO_CIRCLE_ARCMIN', '0') or '0')
+    except Exception:
+        circle_arcmin = 0.0
+
+    if circle_arcmin > 0.0:
+        center0 = _tile_center_from_index_or_name(tile_dir)
+        if center0 is None:
+            print('[STEP4][WARN]', tile_dir.name, 'VASCO_CIRCLE_ARCMIN set but tile center unavailable; skipping circle cut')
+        else:
+            before_copy = catdir / 'sextractor_pass2_before_circle_filter.csv'
+            status_json = catdir / 'circle_filter_status.json'
+            try:
+                _circle_filter_csv_inplace(
+                    sex_csv,
+                    center_ra_deg=float(center0[0]),
+                    center_dec_deg=float(center0[1]),
+                    radius_arcmin=float(circle_arcmin),
+                    before_copy=before_copy,
+                    status_json=status_json,
+                )
+                # If filtering resulted in an empty catalog, keep it (parity behaviour) but warn loudly.
+                try:
+                    out_rows = _csv_data_rows(sex_csv)
+                    print('[STEP4][INFO]', tile_dir.name, f'circle cut <= {circle_arcmin:.1f}′ applied -> rows={out_rows}')
+                except Exception:
+                    print('[STEP4][INFO]', tile_dir.name, f'circle cut <= {circle_arcmin:.1f}′ applied')
+            except Exception as e:
+                print('[STEP4][WARN]', tile_dir.name, 'circle cut failed; using square catalog:', e)
 
     # 2) Neighbourhood caches (fetch stage happens before this in cmd_step4_xmatch)
     gaia_csv = catdir / 'gaia_neighbourhood.csv'
