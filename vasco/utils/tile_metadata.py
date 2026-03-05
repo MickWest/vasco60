@@ -140,7 +140,7 @@ def update_tile_to_plate_csv(meta_dir: Path, row: TilePlateRow, filename: str = 
 
 def update_tiles_registry(meta_dir: Path, *, tile_id: str, ra_deg: float, dec_deg: float,
                           survey: str, size_arcmin: float, pixel_scale_arcsec: float,
-                          status: str = 'ok', source: str = 'step1-download', irsa_plateid: str, notes: str = '') -> Path:
+                          status: str = 'ok', source: str = 'step1-download', vasco_plateid: str, notes: str = '') -> Path:
     out = meta_dir / 'tiles_registry.csv'
     fieldnames = [
         'tile_id','ra_deg','dec_deg','survey','size_arcmin','pixel_scale_arcsec',
@@ -169,7 +169,7 @@ def update_tiles_registry(meta_dir: Path, *, tile_id: str, ra_deg: float, dec_de
         'status': status,
         'downloaded_utc': _utc_now_iso(),
         'source': source,
-        'plate_id': irsa_plateid,
+        'plate_id': vasco_plateid,
         'notes': notes,
     }
 
@@ -202,15 +202,15 @@ def write_dss1red_title(tile_dir: Path, row: TilePlateRow, *, prefer_local_heade
         src_rel = row.irsa_filename or row.tile_fits or ''
 
     content_lines = [
-        f'PLTLABEL: {row.irsa_platelabel}',
-        f'PLATEID: {row.irsa_plateid}',
-        f'REGION: {row.plate_id}',
-        f'DATE-OBS: {row.irsa_date_obs or row.tile_date_obs}',
-        f'FITS: {row.irsa_filename or row.tile_fits}',
-        f'SOURCE: {src_rel}',
-        f'SEP_DEG: {row.irsa_center_sep_deg}',
+        f'PLTLABEL: {row.irsa_platelabel}'+"\n",
+        f'PLATEID: {row.irsa_plateid}'+"\n",
+        f'REGION: {row.plate_id}'+"\n",
+        f'DATE-OBS: {row.irsa_date_obs or row.tile_date_obs}'+"\n",
+        f'FITS: {row.irsa_filename or row.tile_fits}'+"\n",
+        f'SOURCE: {src_rel}'+"\n",
+        f'SEP_DEG: {row.irsa_center_sep_deg}'+"\n",
     ]
-    title_path.write_text(''.join(content_lines) + '\n', encoding='utf-8')
+    title_path.write_text(''.join(content_lines) + '', encoding='utf-8')
     return title_path
 
 
@@ -251,7 +251,7 @@ def update_all_after_download(*, tile_dir: Path, fits_path: Path, tile_id: str,
                                     pixel_scale_arcsec=pixel_scale_arcsec,
                                     status='ok',
                                     source='step1-download',
-                                    irsa_plateid=plateid)
+                                    vasco_plateid=region)
     out_title = write_dss1red_title(tile_dir, row, prefer_local_header=prefer_local_header)
 
     return {
