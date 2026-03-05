@@ -140,11 +140,11 @@ def update_tile_to_plate_csv(meta_dir: Path, row: TilePlateRow, filename: str = 
 
 def update_tiles_registry(meta_dir: Path, *, tile_id: str, ra_deg: float, dec_deg: float,
                           survey: str, size_arcmin: float, pixel_scale_arcsec: float,
-                          status: str = 'ok', source: str = 'step1-download', irsa_plateid, notes: str = '') -> Path:
+                          status: str = 'ok', source: str = 'step1-download', irsa_plateid: str, notes: str = '') -> Path:
     out = meta_dir / 'tiles_registry.csv'
     fieldnames = [
         'tile_id','ra_deg','dec_deg','survey','size_arcmin','pixel_scale_arcsec',
-        'status','downloaded_utc','source', 'irsa_plateid', 'notes'
+        'status','downloaded_utc','source', 'plate_id', 'notes'
     ]
 
     rows: Dict[str, dict] = {}
@@ -168,8 +168,8 @@ def update_tiles_registry(meta_dir: Path, *, tile_id: str, ra_deg: float, dec_de
         'pixel_scale_arcsec': f'{float(pixel_scale_arcsec):.3f}',
         'status': status,
         'downloaded_utc': _utc_now_iso(),
-        'plate_id': irsa_plateid,
         'source': source,
+        'plate_id': irsa_plateid,
         'notes': notes,
     }
 
