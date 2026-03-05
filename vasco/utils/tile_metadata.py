@@ -209,9 +209,7 @@ def write_dss1red_title(tile_dir: Path, row: TilePlateRow, *, prefer_local_heade
         f'SOURCE: {src_rel}',
         f'SEP_DEG: {row.irsa_center_sep_deg}',
     ]
-    title_path.write_text('
-'.join(content_lines) + '
-', encoding='utf-8')
+    title_path.write_text(''.join(content_lines) + '', encoding='utf-8')
     return title_path
 
 
