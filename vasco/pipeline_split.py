@@ -156,7 +156,7 @@ def run_psfex(pass1_ldac: str | Path, tile_dir: Path, *, config_root: str = 'con
 
     # Force PSFEx to read the detections table (extension 2) only.
     
-    ldac_input = 'pass1.ldac#2'
+    ldac_input = 'pass1.ldac#LDAC_OBJECTS'
 
     conf = Path('psfex.conf')
     out = tile_dir / 'psfex.out'
