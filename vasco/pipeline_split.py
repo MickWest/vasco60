@@ -155,8 +155,8 @@ def run_psfex(pass1_ldac: str | Path, tile_dir: Path, *, config_root: str = 'con
     _stage_to_run_folder(tile_dir, Path(config_root), ['psfex.conf'])
 
     # Force PSFEx to read the detections table (extension 2) only.
-    # Using CFITSIO bracket syntax is commonly supported by FITS readers.
-    ldac_input = 'pass1.ldac[2]'
+    
+    ldac_input = 'pass1.ldac#2'
 
     conf = Path('psfex.conf')
     out = tile_dir / 'psfex.out'
