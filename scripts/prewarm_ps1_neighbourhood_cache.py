@@ -56,10 +56,10 @@ def iter_tile_dirs_sharded(tiles_root: Path):
 
 def parse_center_from_tile_name(name: str):
     try:
-        if not name.startswith(TILE_PREFIX) or "-DEC" not in name:
+        if not name.startswith(TILE_PREFIX) or "_DEC" not in name:
             return None
-        ra_part = name[len(TILE_PREFIX): name.index("-DEC")]
-        dec_part = name[name.index("-DEC") + len("-DEC"):]
+        ra_part = name[len(TILE_PREFIX): name.index("_DEC")]
+        dec_part = name[name.index("_DEC") + len("_DEC"):]
         return float(ra_part), float(dec_part)
     except Exception:
         return None
