@@ -60,7 +60,8 @@ def parse_center_from_tile_name(name: str):
             return None
         ra_part = name[len(TILE_PREFIX): name.index("_DEC")]
         dec_part = name[name.index("_DEC") + len("_DEC"):]
-        return float(ra_part), float(dec_part)
+        dec_value = dec_part.replace("p", "")  # Remove the 'p' from DECp...
+        return float(ra_part), float(dec_value)
     except Exception:
         return None
 
