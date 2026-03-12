@@ -3,6 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 import csv
 import requests
+import os
+import time
+
 
 __all__ = [
     'fetch_gaia_neighbourhood',
@@ -64,7 +67,7 @@ def fetch_gaia_neighbourhood(tile_dir: Path | str,
     return out
 
 # ---------------------------------------------------------------
-# PS1 DR2 via MAST Catalogs API (mean table, explicit columns)
+# PS1 DR2 via Vizier Catalogs API (mean table, explicit columns)
 # ---------------------------------------------------------------
 
 def fetch_ps1_neighbourhood(tile_dir: Path | str,
@@ -72,16 +75,14 @@ def fetch_ps1_neighbourhood(tile_dir: Path | str,
                              radius_arcmin: float,
                              *, max_records: int = 50000,
                              timeout: float = 60.0) -> Path:
-    """Fetch PS1 DR2 mean-table neighborhood CSV with explicit columns and progress logs.
+    """Fetch PS1 DR2 neighborhood via CDS/VizieR API with explicit columns and progress logs.
 
     Honors environment variables:
-        VASCO_PS1_RADIUS_DEG  (override radius in degrees)
-        VASCO_PS1_TIMEOUT     (seconds per attempt)
-        VASCO_PS1_ATTEMPTS    (retry attempts)
-        VASCO_PS1_COLUMNS     (comma-separated override of requested columns)
+        VASCO_PS1_RADIUS_DEG
+        VASCO_PS1_TIMEOUT
+        VASCO_PS1_ATTEMPTS
+        VASCO_PS1_COLUMNS
     """
-    import os, time
-
     tile_dir = Path(tile_dir)
     out = tile_dir / 'catalogs' / 'ps1_neighbourhood.csv'
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -97,36 +98,36 @@ def fetch_ps1_neighbourhood(tile_dir: Path | str,
     if radius_deg is None:
         radius_deg = min(float(radius_arcmin) / 60.0, 0.5)
 
-    base = 'https://catalogs.mast.stsci.edu/api/v0.1/panstarrs'
-    url  = base + '/dr2/mean.csv'
+    base = 'https://vizier.u-strasbg.fr/viz-bin/asu-tsv'
+    url = base
 
-    _timeout  = float(os.getenv('VASCO_PS1_TIMEOUT', timeout))
+    _timeout = float(os.getenv('VASCO_PS1_TIMEOUT', timeout))
     _attempts = int(os.getenv('VASCO_PS1_ATTEMPTS', '3'))
 
     default_cols = [
-        'objID','raMean','decMean','nDetections','ng','nr','ni','nz','ny',
-        'gMeanPSFMag','rMeanPSFMag','iMeanPSFMag','zMeanPSFMag','yMeanPSFMag'
+        'objID', 'RAJ2000', 'DEJ2000', 'Nd', 'gmag', 'rmag', 'imag', 'zmag', 'ymag', '_r'
     ]
     _cols_override = os.getenv('VASCO_PS1_COLUMNS')
     cols = [c.strip() for c in _cols_override.split(',')] if _cols_override else default_cols
 
     params = {
-        'ra': '{:.8f}'.format(float(ra_deg)),
-        'dec': '{:.8f}'.format(float(dec_deg)),
-        'radius': '{:.8f}'.format(float(radius_deg)),
-        'nDetections.gte': '1',
-        'pagesize': str(int(max_records)),
-        'format': 'csv',
-        'columns': '[' + ','.join(cols) + ']'
+        '-source': 'II/389/ps1_dr2',
+        '-c': f'{ra_deg:.8f} {dec_deg:.8f}',
+        '-c.r': f'{radius_deg:.8f}',
+        '-out.max': str(int(max_records)),
+        '-out.add': '_r',
+        '-out.form': 'dec',
+        '-sort': '_r',
+        '-out': ','.join(cols)
     }
 
     def _try_once():
         t0 = time.time()
-        print('[POST][PS1] GET {} (timeout={}s, radius={})'.format(url, _timeout, params['radius']))
+        print(f'[POST][PS1] GET {url} (timeout={_timeout}s, radius={radius_deg})')
         r = requests.get(url, params=params, timeout=_timeout)
         r.raise_for_status()
         dt = time.time() - t0
-        print('[POST][PS1] OK in {:.2f}s ({} bytes)'.format(dt, len(r.content)))
+        print(f'[POST][PS1] OK in {dt:.2f}s ({len(r.content)} bytes)')
         return r
 
     last_exc = None
@@ -137,7 +138,7 @@ def fetch_ps1_neighbourhood(tile_dir: Path | str,
             return out
         except Exception as e:
             last_exc = e
-            print('[POST][WARN] PS1 attempt {}/{} failed: {}'.format(k, _attempts, e))
+            print(f'[POST][WARN] PS1 attempt {k}/{_attempts} failed: {e}')
             if k < _attempts:
                 time.sleep(min(10, 1.5 ** k))
     raise last_exc
