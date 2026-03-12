@@ -43,7 +43,7 @@ _DETECTED_REPO = _add_repo_to_syspath()
 
 from vasco.external_fetch_online import fetch_ps1_neighbourhood
 
-TILE_PREFIX = "tile-RA"
+TILE_PREFIX = "tile_RA"
 PS1_DEC_LIMIT = -30.0
 
 
@@ -56,9 +56,9 @@ def iter_tile_dirs_sharded(tiles_root: Path):
 
 def parse_center_from_tile_name(name: str):
     try:
-        if not name.startswith("tile-RA") or "-DEC" not in name:
+        if not name.startswith(TILE_PREFIX) or "-DEC" not in name:
             return None
-        ra_part = name[len("tile-RA"): name.index("-DEC")]
+        ra_part = name[len(TILE_PREFIX): name.index("-DEC")]
         dec_part = name[name.index("-DEC") + len("-DEC"):]
         return float(ra_part), float(dec_part)
     except Exception:
