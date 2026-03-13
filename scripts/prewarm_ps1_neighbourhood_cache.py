@@ -50,7 +50,7 @@ PS1_DEC_LIMIT = -30.0
 def iter_tile_dirs_sharded(tiles_root: Path):
     for root, dirs, _files in os.walk(tiles_root):
         for d in dirs:
-            if d.startswith(TILE_PREFIX) and "-DEC" in d:
+            if d.startswith(TILE_PREFIX) and d[-4:] == "_DEC":
                 yield Path(root) / d
 
 
@@ -71,7 +71,6 @@ def atomic_write_text(path: Path, text: str):
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
-
 
 def cache_exists(path: Path) -> bool:
     try:
