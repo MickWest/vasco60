@@ -17,11 +17,8 @@ tail, ~20-50x faster per tile for the vetoes we actually run.
 | Catalog | Status | Source | Cache dir default |
 |---|---|---|---|
 | [Gaia DR3](gaia/) | done | `http://cdn.gea.esac.esa.int/Gaia/gdr3/gaia_source/` | `/Volumes/SANDISK/Gaia` |
-| PS1 DR2 | planned | TBD (MAST HATS / ESA mirror) | — |
-| USNO-B 1.0 | planned | USNO bulk (native binary) | — |
-
-Planned catalogs will each get their own subdirectory following the
-conventions below.
+| [PS1 DR2](ps1/) | done | STScI HATS `s3://stpubdata/panstarrs/ps1/public/hats/otmo/` | `/Volumes/SANDISK/PS1` |
+| [USNO-B 1.0](usnob/) | done | VizieR TAP `I/284/out` | `/Volumes/SANDISK/USNOB` |
 
 ## Conventions for adding a new catalog
 
