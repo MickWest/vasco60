@@ -195,23 +195,21 @@ def query_usnob(tile_dir: Path, ra: float, dec: float,
 
     df = _cone_query(
         cache, ra, dec, radius_arcmin,
-        columns=["id", "ra", "dec", "B1mag", "R1mag", "B2mag", "R2mag", "Imag", "pmRA", "pmDE"],
+        columns=["ra", "dec", "B1mag", "R1mag", "B2mag", "R2mag", "Imag", "pmRA", "pmDE"],
     )
 
-    mag_cols = ["B1mag", "R1mag", "B2mag", "R2mag", "Imag"]
+    mag_cols = ["R1mag", "R2mag", "B1mag", "B2mag", "Imag"]
     pm_cols = ["pmRA", "pmDE"]
 
     with out.open("w", newline="") as f:
         w = csv.writer(f)
-        # Match astroquery Vizier output: astroquery writes lowercase ra/dec
-        # (confirmed by Janne's epoch-propagation fix 5b48711 which passes
-        # ra_col='ra', dec_col='dec' for USNO-B).
-        w.writerow(["USNO-B1.0", "ra", "dec",
-                     "B1mag", "R1mag", "B2mag", "R2mag", "Imag",
-                     "pmRA", "pmDE"])
+        # Match actual astroquery/VizieR USNO-B output exactly (confirmed from
+        # prod CSV header in 5b48711): ra,dec,R1mag,R2mag,B1mag,B2mag,Imag,pmRA,pmDE,_r
+        # No 'USNO-B1.0' designation column; _r is the separation from query centre.
+        w.writerow(["ra", "dec", "R1mag", "R2mag", "B1mag", "B2mag", "Imag",
+                    "pmRA", "pmDE", "_r"])
         for _, r in df.iterrows():
             row = [
-                r["id"],
                 f"{r['ra']:.8f}",
                 f"{r['dec']:.8f}",
             ]
@@ -227,5 +225,6 @@ def query_usnob(tile_dir: Path, ra: float, dec: float,
                     row.append("")
                 else:
                     row.append(str(int(v)))
+            row.append(f"{r['_r']:.6f}")
             w.writerow(row)
     return out
