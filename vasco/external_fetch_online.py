@@ -23,6 +23,9 @@ def fetch_usnob_neighbourhood(tile_dir: Path | str,
     Writes catalogs/usnob_neighbourhood.csv
 
     If VASCO_USNOB_CACHE is set, queries the local Parquet cache instead.
+
+    Env vars:
+        VASCO_USNOB_ATTEMPTS  number of retry attempts (default 3)
     """
     from vasco.local_cache_query import query_usnob
     cached = query_usnob(tile_dir, ra_deg, dec_deg, radius_arcmin)
@@ -44,26 +47,40 @@ def fetch_usnob_neighbourhood(tile_dir: Path | str,
         '-out': ','.join(cols),
     }
     import requests, csv
-    r = requests.get(base, params=params, timeout=timeout)
-    r.raise_for_status()
-    lines = [ln for ln in r.text.splitlines() if ln and not ln.startswith('#')]
-    if not lines:
-        out.write_text('ra,dec\n', encoding='utf-8')
-        return out
-    header = lines[0].split('\t')
-    data_rows = [ln.split('\t') for ln in lines[1:]]
-    colmap = {name: idx for idx, name in enumerate(header)}
-    keep = [c for c in cols if c in colmap]
-    with out.open('w', newline='', encoding='utf-8') as f:
-        w = csv.writer(f)
-        w.writerow(['ra' if c=='RAJ2000' else ('dec' if c=='DEJ2000' else c) for c in keep])
-        for row in data_rows:
-            try:
-                float(row[colmap['RAJ2000']]); float(row[colmap['DEJ2000']])
-            except Exception:
-                continue
-            w.writerow([row[colmap[c]] for c in keep])
-    return out
+    attempts = int(os.getenv('VASCO_USNOB_ATTEMPTS', '3'))
+    last_exc = None
+    for attempt in range(1, attempts + 1):
+        try:
+            r = requests.get(base, params=params, timeout=timeout)
+            r.raise_for_status()
+            lines = [ln for ln in r.text.splitlines() if ln and not ln.startswith('#')]
+            if not lines:
+                out.write_text('ra,dec\n', encoding='utf-8')
+                return out
+            header = lines[0].split('\t')
+            colmap = {name: idx for idx, name in enumerate(header)}
+            keep = [c for c in cols if c in colmap]
+            if 'RAJ2000' not in colmap or 'DEJ2000' not in colmap:
+                raise ValueError(
+                    f"VizieR USNO-B response missing expected columns; "
+                    f"got header: {header[:5]}"
+                )
+            data_rows = [ln.split('\t') for ln in lines[1:]]
+            with out.open('w', newline='', encoding='utf-8') as f:
+                w = csv.writer(f)
+                w.writerow(['ra' if c=='RAJ2000' else ('dec' if c=='DEJ2000' else c) for c in keep])
+                for row in data_rows:
+                    try:
+                        float(row[colmap['RAJ2000']]); float(row[colmap['DEJ2000']])
+                    except Exception:
+                        continue
+                    w.writerow([row[colmap[c]] for c in keep])
+            return out
+        except Exception as e:
+            last_exc = e
+            if attempt < attempts:
+                time.sleep(min(10, 1.5 ** attempt))
+    raise last_exc
 
 # --- PS1 cap override (optional) ----------------------------------------------
 def _ps1_effective_radius_deg(radius_arcmin: float) -> float:
