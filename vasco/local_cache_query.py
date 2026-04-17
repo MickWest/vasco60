@@ -228,3 +228,41 @@ def query_usnob(tile_dir: Path, ra: float, dec: float,
             row.append(f"{r['_r']:.6f}")
             w.writerow(row)
     return out
+
+
+# ── PS1 bright-star query (for spike veto) ──────────────────────────
+
+def query_bright_ps1(
+    ra: float,
+    dec: float,
+    radius_arcmin: float = 45.0,
+    rmag_max: float = 16.0,
+    mindetections: int = 2,
+) -> list | None:
+    """Query local PS1 cache for bright stars (spike veto).
+
+    Drop-in replacement for vasco.mnras.spikes.fetch_bright_ps1 when
+    VASCO_PS1_CACHE is set. Returns a list of BrightStar(ra, dec, rmag)
+    or None if the local cache is not configured.
+    """
+    import pyarrow.compute as pc
+
+    cache = os.getenv("VASCO_PS1_CACHE")
+    if not cache:
+        return None
+
+    from vasco.mnras.spikes import BrightStar, _is_valid_mag
+
+    df = _cone_query(
+        cache, ra, dec, radius_arcmin,
+        columns=["ra", "dec", "rmag", "nDetections"],
+        parquet_filter=(pc.field("nDetections") >= mindetections),
+    )
+
+    out = []
+    for _, r in df.iterrows():
+        rmag = float(r["rmag"])
+        if not _is_valid_mag(rmag) or rmag > rmag_max:
+            continue
+        out.append(BrightStar(ra=float(r["ra"]), dec=float(r["dec"]), rmag=rmag))
+    return out

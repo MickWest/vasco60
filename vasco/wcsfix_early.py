@@ -152,13 +152,18 @@ def _robust_fit_offsets(dra_det: np.ndarray,
         y_ra = dra_off[mask]
         y_de = ddec_off[mask]
 
-        # Fit via least squares
-        coef_ra, *_ = np.linalg.lstsq(Xm, y_ra, rcond=None)
-        coef_de, *_ = np.linalg.lstsq(Xm, y_de, rcond=None)
-
-        # Compute residuals in arcsec
-        pred_ra = X @ coef_ra
-        pred_de = X @ coef_de
+        # Fit via least squares. rcond=None lets numpy choose machine-eps rank
+        # detection, which on near-singular Xm (sparse/collinear matches) can
+        # return NaN/Inf coefs; the follow-up matmul then produces non-finite
+        # predictions and numpy emits divide/overflow/invalid FPE warnings.
+        # Mask the FPE signals here — the outlier clip below discards the bad
+        # rows anyway, and the final-fit sanity check after the loop catches
+        # the case where the fit never converges to finite coefs.
+        with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+            coef_ra, *_ = np.linalg.lstsq(Xm, y_ra, rcond=None)
+            coef_de, *_ = np.linalg.lstsq(Xm, y_de, rcond=None)
+            pred_ra = X @ coef_ra
+            pred_de = X @ coef_de
         res_arcsec = _deg_to_arcsec(np.sqrt((dra_off - pred_ra) ** 2 + (ddec_off - pred_de) ** 2))
 
         # Robust sigma estimate (MAD)
@@ -191,8 +196,20 @@ def _robust_fit_offsets(dra_det: np.ndarray,
     Xm = X[mask]
     y_ra = dra_off[mask]
     y_de = ddec_off[mask]
-    coef_ra, *_ = np.linalg.lstsq(Xm, y_ra, rcond=None)
-    coef_de, *_ = np.linalg.lstsq(Xm, y_de, rcond=None)
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        coef_ra, *_ = np.linalg.lstsq(Xm, y_ra, rcond=None)
+        coef_de, *_ = np.linalg.lstsq(Xm, y_de, rcond=None)
+
+    # Sanity: if the final fit produced non-finite coefs (pathologically bad
+    # geometry), fail loudly so the caller falls back to lower-degree retry or
+    # raw-coord carry-through instead of silently writing NaN/Inf RA_corr.
+    if not (np.all(np.isfinite(coef_ra)) and np.all(np.isfinite(coef_de))):
+        raise RuntimeError(
+            f"wcsfix final fit produced non-finite coefficients "
+            f"(coef_ra_finite={bool(np.all(np.isfinite(coef_ra)))}, "
+            f"coef_de_finite={bool(np.all(np.isfinite(coef_de)))}, "
+            f"kept={info.get('kept')})"
+        )
 
     return coef_ra, coef_de, info
 

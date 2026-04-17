@@ -99,6 +99,12 @@ We do NOT target parity with the published MNRAS “R remainder” list.
 
 ## Log of Recent Completions
 
+[x] Known upstream gaps documented (2026-04-17)
+    Plate XE884 has 6 tiles that STScI DSS cannot serve (subfiles
+    xe884.{jx,sq,js,xj,sj,sc} missing on the archive). Retry confirmed
+    persistent 'No such file or directory' errors. Gap recorded in
+    data/metadata/known_gaps.csv; plan CSV unchanged.
+
 [x] Post-pipeline steps docs: move from online-only documentation into repo docs index
 
 [x] Gate sanity check on subset

@@ -48,6 +48,21 @@ import csv as _csv
 from vasco.wcsfix_early import ensure_wcsfix_catalog, WcsFixConfig
 
 
+# --- instrumentation helper ---
+# Emits `[TIMING] phase=<name> sec=<x.xxx>` lines parseable by tools/time_one_tile.py.
+# Zero-cost when nothing is listening; always on (cheap enough).
+from contextlib import contextmanager as _contextmanager
+
+@_contextmanager
+def _phase(name: str):
+    """Time a block and emit a single [TIMING] line. Uses perf_counter."""
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        dt = time.perf_counter() - t0
+        print(f"[TIMING] phase={name} sec={dt:.3f}", flush=True)
+
 
 # --- helpers ---
 def _ensure_tool_cli(tool: str) -> None:
@@ -598,15 +613,24 @@ def _apply_mnras_filters_and_spikes(tile_dir: Path, sex_csv: Path, buckets: dict
     if center:
         cache_path = (tile_dir / 'catalogs' / 'ps1_bright_stars_r16_rad45.csv')
         try:
-            # Use cache if present
+            # Use per-tile CSV cache if present (fast rerun)
             if cache_path.exists() and cache_path.stat().st_size > 0:
                 bright = _read_bright_cache(cache_path)
             else:
-                bright = fetch_bright_ps1(
+                # Try local Parquet cache first (no network), fall back to MAST
+                from vasco.local_cache_query import query_bright_ps1 as _local_bright
+                local_result = _local_bright(
                     center[0], center[1],
-                    radius_arcmin=45.0, rmag_max=16.0, mindetections=2
+                    radius_arcmin=45.0, rmag_max=16.0, mindetections=2,
                 )
-                # Save cache for fast reruns
+                if local_result is not None:
+                    bright = local_result
+                else:
+                    bright = fetch_bright_ps1(
+                        center[0], center[1],
+                        radius_arcmin=45.0, rmag_max=16.0, mindetections=2
+                    )
+                # Save per-tile CSV cache for fast reruns
                 _write_bright_cache(cache_path, bright)
         except Exception:
             bright = []
@@ -1333,14 +1357,15 @@ def _post_xmatch_tile(tile_dir, pass2_ldac, *, radius_arcsec: float = 5.0) -> No
         )
 
         if gaia_csv.exists() and gaia_csv.stat().st_size > 0:
-            out_wcs, status = ensure_wcsfix_catalog(
-                tile_dir,
-                sex_csv,
-                gaia_csv,
-                center=center,
-                cfg=cfg,
-                force=bool(os.getenv('VASCO_WCSFIX_FORCE', '').strip()),
-            )
+            with _phase('step4.wcsfix'):
+                out_wcs, status = ensure_wcsfix_catalog(
+                    tile_dir,
+                    sex_csv,
+                    gaia_csv,
+                    center=center,
+                    cfg=cfg,
+                    force=bool(os.getenv('VASCO_WCSFIX_FORCE', '').strip()),
+                )
 
             if status.get('ok'):
                 sex_for_veto = out_wcs
@@ -1460,15 +1485,18 @@ def _post_xmatch_tile(tile_dir, pass2_ldac, *, radius_arcsec: float = 5.0) -> No
     # Veto accounting
     veto_start_rows = _csv_data_rows(sex_for_veto)
 
-    gaia_ok = _veto('Gaia', sex_for_veto, gaia_csv, out_gaia, after_gaia, default_cat_cols=('ra', 'dec'))
+    with _phase('step4.veto_gaia'):
+        gaia_ok = _veto('Gaia', sex_for_veto, gaia_csv, out_gaia, after_gaia, default_cat_cols=('ra', 'dec'))
     veto_after_gaia_rows = _csv_data_rows(after_gaia)
 
-    ps1_ok = _veto('PS1', after_gaia, ps1_csv, out_ps1, after_ps1,
-                   default_cat_cols=('raMean', 'decMean'), disable_env='VASCO_DISABLE_PS1')
+    with _phase('step4.veto_ps1'):
+        ps1_ok = _veto('PS1', after_gaia, ps1_csv, out_ps1, after_ps1,
+                       default_cat_cols=('raMean', 'decMean'), disable_env='VASCO_DISABLE_PS1')
     veto_after_ps1_rows = _csv_data_rows(after_ps1)
 
-    usno_ok = _veto('USNO-B', after_ps1, usnob_csv, out_usnob, after_usnob,
-                    default_cat_cols=('RAJ2000', 'DEJ2000'), disable_env='VASCO_DISABLE_USNOB')
+    with _phase('step4.veto_usnob'):
+        usno_ok = _veto('USNO-B', after_ps1, usnob_csv, out_usnob, after_usnob,
+                        default_cat_cols=('RAJ2000', 'DEJ2000'), disable_env='VASCO_DISABLE_USNOB')
     veto_after_usnob_rows = _csv_data_rows(after_usnob)
 
     # “Eliminated” (based on carry-forward rowcounts)
@@ -1527,7 +1555,8 @@ def _post_xmatch_tile(tile_dir, pass2_ldac, *, radius_arcsec: float = 5.0) -> No
     reason_counts = _analyze_rejection_reasons(remainder, rej_extract, rej_morph)
 
     # Apply the actual filters/spikes pipeline
-    _apply_mnras_filters_and_spikes(tile_dir, remainder, buckets)
+    with _phase('step4.late_filters_spikes'):
+        _apply_mnras_filters_and_spikes(tile_dir, remainder, buckets)
 
     # Keep HPM late and conservative (flagging only)
     try:
@@ -1648,56 +1677,59 @@ def cmd_step4_xmatch(args: argparse.Namespace) -> int:
         print('[STEP4][INFO]', run_dir.name, 'VASCO_STEP4_NO_FETCH=1 -> skipping Gaia/PS1/USNO fetch; using existing caches only')
     else:
         # ---- Gaia ----
-        try:
-            if os.getenv('VASCO_FORCE_FETCH_GAIA'):
-                fetch_gaia_neighbourhood(run_dir, ra_t, dec_t, radius_arcmin)
-            elif _cache_ok(gaia_cache):
-                print('[STEP4][INFO]', run_dir.name, 'Gaia cache present — skipping fetch')
-            else:
-                fetch_gaia_neighbourhood(run_dir, ra_t, dec_t, radius_arcmin)
-        except Exception as e:
-            print('[STEP4][WARN]', run_dir.name, 'Gaia fetch failed:', e)
+        with _phase('step4.fetch_gaia'):
+            try:
+                if os.getenv('VASCO_FORCE_FETCH_GAIA'):
+                    fetch_gaia_neighbourhood(run_dir, ra_t, dec_t, radius_arcmin)
+                elif _cache_ok(gaia_cache):
+                    print('[STEP4][INFO]', run_dir.name, 'Gaia cache present — skipping fetch')
+                else:
+                    fetch_gaia_neighbourhood(run_dir, ra_t, dec_t, radius_arcmin)
+            except Exception as e:
+                print('[STEP4][WARN]', run_dir.name, 'Gaia fetch failed:', e)
 
         # ---- PS1 ----
-        try:
-            if os.getenv('VASCO_DISABLE_PS1'):
-                print('[STEP4][INFO]', run_dir.name, 'PS1 disabled by env')
-            else:
-                if dec_t < -30.0:
-                    print('[STEP4][INFO]', run_dir.name, f'PS1 skipped (Dec={dec_t:.3f} < -30°, outside coverage)')
-                    _ensure_ps1_sentinel(ps1_cache)
+        with _phase('step4.fetch_ps1'):
+            try:
+                if os.getenv('VASCO_DISABLE_PS1'):
+                    print('[STEP4][INFO]', run_dir.name, 'PS1 disabled by env')
                 else:
-                    if os.getenv('VASCO_FORCE_FETCH_PS1'):
-                        fetch_ps1_neighbourhood(run_dir, ra_t, dec_t, radius_arcmin)
-                    elif _cache_ok(ps1_cache):
-                        print('[STEP4][INFO]', run_dir.name, 'PS1 cache present — skipping fetch')
+                    if dec_t < -30.0:
+                        print('[STEP4][INFO]', run_dir.name, f'PS1 skipped (Dec={dec_t:.3f} < -30°, outside coverage)')
+                        _ensure_ps1_sentinel(ps1_cache)
                     else:
-                        fetch_ps1_neighbourhood(run_dir, ra_t, dec_t, radius_arcmin)
+                        if os.getenv('VASCO_FORCE_FETCH_PS1'):
+                            fetch_ps1_neighbourhood(run_dir, ra_t, dec_t, radius_arcmin)
+                        elif _cache_ok(ps1_cache):
+                            print('[STEP4][INFO]', run_dir.name, 'PS1 cache present — skipping fetch')
+                        else:
+                            fetch_ps1_neighbourhood(run_dir, ra_t, dec_t, radius_arcmin)
 
-                    # If PS1 returned 0 bytes, normalize to header-only sentinel
-                    try:
-                        if ps1_cache.exists() and ps1_cache.stat().st_size == 0:
-                            _ensure_ps1_sentinel(ps1_cache)
-                    except Exception:
-                        pass
-        except Exception as e:
-            print('[STEP4][WARN]', run_dir.name, 'PS1 fetch failed:', e)
+                        # If PS1 returned 0 bytes, normalize to header-only sentinel
+                        try:
+                            if ps1_cache.exists() and ps1_cache.stat().st_size == 0:
+                                _ensure_ps1_sentinel(ps1_cache)
+                        except Exception:
+                            pass
+            except Exception as e:
+                print('[STEP4][WARN]', run_dir.name, 'PS1 fetch failed:', e)
 
         # ---- USNO-B ----
-        try:
-            if os.getenv('VASCO_DISABLE_USNOB'):
-                print('[STEP4][INFO]', run_dir.name, 'USNO-B disabled by env')
-            else:
-                if os.getenv('VASCO_FORCE_FETCH_USNOB'):
-                    fetch_usnob_neighbourhood(run_dir, ra_t, dec_t, radius_arcmin)
-                    print('[STEP4]', run_dir.name, 'USNO-B -> catalogs/usnob_neighbourhood.csv')
-                elif _cache_ok(usnob_cache):
-                    print('[STEP4][INFO]', run_dir.name, 'USNO-B cache present — skipping fetch')
+        with _phase('step4.fetch_usnob'):
+            try:
+                if os.getenv('VASCO_DISABLE_USNOB'):
+                    print('[STEP4][INFO]', run_dir.name, 'USNO-B disabled by env')
                 else:
-                    fetch_usnob_neighbourhood(run_dir, ra_t, dec_t, radius_arcmin)
-                    print('[STEP4]', run_dir.name, 'USNO-B -> catalogs/usnob_neighbourhood.csv')
-        except Exception as e:
-            print('[STEP4][WARN]', run_dir.name, 'USNO-B fetch failed:', e)
+                    if os.getenv('VASCO_FORCE_FETCH_USNOB'):
+                        fetch_usnob_neighbourhood(run_dir, ra_t, dec_t, radius_arcmin)
+                        print('[STEP4]', run_dir.name, 'USNO-B -> catalogs/usnob_neighbourhood.csv')
+                    elif _cache_ok(usnob_cache):
+                        print('[STEP4][INFO]', run_dir.name, 'USNO-B cache present — skipping fetch')
+                    else:
+                        fetch_usnob_neighbourhood(run_dir, ra_t, dec_t, radius_arcmin)
+                        print('[STEP4]', run_dir.name, 'USNO-B -> catalogs/usnob_neighbourhood.csv')
+            except Exception as e:
+                print('[STEP4][WARN]', run_dir.name, 'USNO-B fetch failed:', e)
 
     # ------------------------------------------------------------------
     # Bug #6 fix: epoch-propagate Gaia (J2016.0) and USNO-B (J2000.0)
@@ -1705,35 +1737,37 @@ def cmd_step4_xmatch(args: argparse.Namespace) -> int:
     # 5" cone match correctly vetoes high-PM stars at their plate-epoch
     # positions instead of letting them leak through.
     # ------------------------------------------------------------------
-    try:
-        raw_fits = next(iter(sorted((run_dir / 'raw').glob('*.fits'))), None)
-        plate_epoch = _plate_epoch_year_from_fits(raw_fits) if raw_fits else None
-        if plate_epoch is not None:
-            print(f'[STEP4][INFO] {run_dir.name} plate epoch = {plate_epoch:.3f}')
-            catdir = run_dir / 'catalogs'
-            if gaia_cache.exists() and gaia_cache.stat().st_size > 0:
-                ok = _propagate_catalog_epoch(
-                    gaia_cache, catdir / 'gaia_neighbourhood_at_plate.csv',
-                    catalog_epoch_year=2016.0, plate_epoch_year=plate_epoch,
-                    ra_col='ra', dec_col='dec', pmra_col='pmRA', pmde_col='pmDE',
-                )
-                if ok:
-                    print(f'[STEP4][INFO] {run_dir.name} Gaia epoch-propagated (dt={plate_epoch-2016.0:+.1f} yr)')
-            if usnob_cache.exists() and usnob_cache.stat().st_size > 0:
-                ok = _propagate_catalog_epoch(
-                    usnob_cache, catdir / 'usnob_neighbourhood_at_plate.csv',
-                    catalog_epoch_year=2000.0, plate_epoch_year=plate_epoch,
-                    ra_col='ra', dec_col='dec', pmra_col='pmRA', pmde_col='pmDE',
-                )
-                if ok:
-                    print(f'[STEP4][INFO] {run_dir.name} USNO-B epoch-propagated (dt={plate_epoch-2000.0:+.1f} yr)')
-        else:
-            print(f'[STEP4][WARN] {run_dir.name} plate epoch unavailable — skipping epoch propagation')
-    except Exception as e:
-        print(f'[STEP4][WARN] {run_dir.name} epoch propagation failed: {e}')
+    with _phase('step4.epoch_propagate'):
+        try:
+            raw_fits = next(iter(sorted((run_dir / 'raw').glob('*.fits'))), None)
+            plate_epoch = _plate_epoch_year_from_fits(raw_fits) if raw_fits else None
+            if plate_epoch is not None:
+                print(f'[STEP4][INFO] {run_dir.name} plate epoch = {plate_epoch:.3f}')
+                catdir = run_dir / 'catalogs'
+                if gaia_cache.exists() and gaia_cache.stat().st_size > 0:
+                    ok = _propagate_catalog_epoch(
+                        gaia_cache, catdir / 'gaia_neighbourhood_at_plate.csv',
+                        catalog_epoch_year=2016.0, plate_epoch_year=plate_epoch,
+                        ra_col='ra', dec_col='dec', pmra_col='pmRA', pmde_col='pmDE',
+                    )
+                    if ok:
+                        print(f'[STEP4][INFO] {run_dir.name} Gaia epoch-propagated (dt={plate_epoch-2016.0:+.1f} yr)')
+                if usnob_cache.exists() and usnob_cache.stat().st_size > 0:
+                    ok = _propagate_catalog_epoch(
+                        usnob_cache, catdir / 'usnob_neighbourhood_at_plate.csv',
+                        catalog_epoch_year=2000.0, plate_epoch_year=plate_epoch,
+                        ra_col='ra', dec_col='dec', pmra_col='pmRA', pmde_col='pmDE',
+                    )
+                    if ok:
+                        print(f'[STEP4][INFO] {run_dir.name} USNO-B epoch-propagated (dt={plate_epoch-2000.0:+.1f} yr)')
+            else:
+                print(f'[STEP4][WARN] {run_dir.name} plate epoch unavailable — skipping epoch propagation')
+        except Exception as e:
+            print(f'[STEP4][WARN] {run_dir.name} epoch propagation failed: {e}')
 
     # Proceed to xmatch using whatever caches exist
-    _post_xmatch_tile(run_dir, p2, radius_arcsec=float(args.xmatch_radius_arcsec))
+    with _phase('step4.post_xmatch_tile'):
+        _post_xmatch_tile(run_dir, p2, radius_arcsec=float(args.xmatch_radius_arcsec))
     _update_tile_status(run_dir, 'step4', 'ok')
     return 0
 
@@ -1762,6 +1796,84 @@ def cmd_step5_filter_within5(args: argparse.Namespace) -> int:
     _update_tile_status(run_dir, 'step5', 'ok')
     return 0
 
+def _run_replication_renders(tile_dir: Path) -> None:
+    """Best-effort per-tile render pass: invoke each scripts/replication/render_*.py
+    via subprocess and summarize results. Failures are logged but never fail step6.
+
+    Disabled by setting the `VASCO_SKIP_RENDER=1` environment variable for
+    batch/headless runs where PNG artifacts aren't wanted.
+    """
+    if os.getenv('VASCO_SKIP_RENDER', '').strip() in ('1', 'true', 'yes', 'y', 'on'):
+        print('[STEP6][RENDER] VASCO_SKIP_RENDER set — skipping per-tile render pass')
+        return
+
+    import subprocess as _sp
+    import sys as _sys
+    repo_root = Path(__file__).resolve().parents[1]
+    renders_dir = repo_root / 'scripts' / 'replication'
+    if not renders_dir.exists():
+        print(f'[STEP6][RENDER] scripts/replication/ not found at {renders_dir} — skipping')
+        return
+
+    scripts = [
+        'render_cutout_preview.py',
+        'render_survivors_and_discards.py',
+        'render_late_rejects.py',
+        'render_spike_layout.py',
+        'render_pm_leakage.py',
+        'render_gaia_rejects.py',
+        'render_ps1_rejects.py',
+    ]
+
+    tile_dir_abs = Path(tile_dir).resolve()
+    ok = 0
+    skipped = 0
+    failed = 0
+    for script in scripts:
+        path = renders_dir / script
+        if not path.exists():
+            continue
+        t0 = time.perf_counter()
+        try:
+            # 120s per script is a generous upper bound; renders are usually <5s
+            # (individual hips2fits fetches can be slow on cache misses, though).
+            res = _sp.run(
+                [_sys.executable, str(path), '--tile-dir', str(tile_dir_abs)],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            dt = time.perf_counter() - t0
+            # Emit a per-script [TIMING] line for the outer driver to parse.
+            print(f"[TIMING] phase=step6.render.{script[:-3]} sec={dt:.3f}", flush=True)
+            last = (res.stdout.strip().splitlines() or [''])[-1]
+            if res.returncode == 0:
+                # Inputs missing / nothing to render → soft skip, not a failure
+                if 'nothing to render' in last or 'nothing to match' in last:
+                    skipped += 1
+                    print(f'[STEP6][RENDER]   skip   {script:<40s}  ({dt:5.1f}s)  {last[:60]}')
+                else:
+                    ok += 1
+                    print(f'[STEP6][RENDER]   ok     {script:<40s}  ({dt:5.1f}s)')
+            else:
+                failed += 1
+                err_tail = (res.stderr.strip().splitlines() or [''])[-1]
+                print(f'[STEP6][RENDER]   FAIL   {script:<40s}  ({dt:5.1f}s)  {err_tail[:90]}')
+        except _sp.TimeoutExpired:
+            dt = time.perf_counter() - t0
+            print(f"[TIMING] phase=step6.render.{script[:-3]} sec={dt:.3f}", flush=True)
+            failed += 1
+            print(f'[STEP6][RENDER]   FAIL   {script:<40s}  ({dt:5.1f}s)  (timeout)')
+        except Exception as e:
+            dt = time.perf_counter() - t0
+            print(f"[TIMING] phase=step6.render.{script[:-3]} sec={dt:.3f}", flush=True)
+            failed += 1
+            print(f'[STEP6][RENDER]   FAIL   {script:<40s}  ({dt:5.1f}s)  {e}')
+
+    print(f'[STEP6][RENDER] done: ok={ok} skip={skipped} fail={failed}')
+
+
 def cmd_step6_summarize(args: argparse.Namespace) -> int:
     # LEGACY / OPTIONAL — not part of the standard vasco60 pipeline run.
     # Exports raw pass2.ldac (pre-veto, pre-circle-cut) to final_catalog.csv/.ecsv
@@ -1774,10 +1886,20 @@ def cmd_step6_summarize(args: argparse.Namespace) -> int:
         print('[STEP6][ERROR] pass2.ldac missing. Run step3-psf-and-pass2 first.')
         _update_tile_status(run_dir, 'step6', 'fail')
         return 2
-    export_and_summarize(p2, run_dir, export=args.export, histogram_col=args.hist_col)
-    _write_text(run_dir / 'RUN_SUMMARY.md', '# Summary written')
+    with _phase('step6.export_and_summarize'):
+        export_and_summarize(p2, run_dir, export=args.export, histogram_col=args.hist_col)
+        _write_text(run_dir / 'RUN_SUMMARY.md', '# Summary written')
     print('[STEP6] Summary + exports written.')
     _update_tile_status(run_dir, 'step6', 'ok')
+
+    # Per-tile replication renders (best-effort; failures never block step6).
+    # Opt out with VASCO_SKIP_RENDER=1 for headless batch runs.
+    try:
+        with _phase('step6.renders_total'):
+            _run_replication_renders(run_dir)
+    except Exception as e:
+        print(f'[STEP6][RENDER] unexpected error: {e}')
+
     return 0
 
 # argparse + main
@@ -1845,6 +1967,16 @@ def cmd_step1_download(args: argparse.Namespace) -> int:
     dec = _to_float_dec(args.dec)
     tile_id = format_tile_id(ra, dec)
     run_dir = Path(args.workdir) / tile_id
+
+    # Cache-aware: skip download if raw/*.fits already exists on disk
+    # (e.g., from a prior download or the bulk download_all_tiles.py run).
+    raw_dir = run_dir / 'raw'
+    existing = list(raw_dir.glob('*.fits')) if raw_dir.exists() else []
+    if existing and not os.getenv('VASCO_FORCE_DOWNLOAD'):
+        fits_path = existing[0]
+        print(f'[STEP1] tile FITS already cached: {fits_path}')
+        _update_tile_status(run_dir, 'step1', 'ok')
+        return 0
 
     try:
         # Downloader will mkdir raw/ only on success (late promotion)

@@ -1,0 +1,28 @@
+# SExtractor pass 2 — stamp variant for fast_tile.py
+#
+# Identical to sex_pass2.sex except:
+#   BACK_SIZE  32 (was 64) — stamps are 91×91 px, so 64-px cells give only
+#     ~1 cell; 32-px cells give a 2×2 grid for local background estimation.
+#   CATALOG_NAME / PSF_NAME are overridden on the command line by fast_tile.py.
+
+CATALOG_NAME     stamp_pass2.ldac
+CATALOG_TYPE     FITS_LDAC
+PARAMETERS_NAME  default.param
+FILTER           Y
+FILTER_NAME      default.conv
+DETECT_TYPE      CCD
+DETECT_MINAREA   5
+DETECT_THRESH    5.0
+ANALYSIS_THRESH  5.0
+PHOT_APERTURES   5
+PHOT_AUTOPARAMS  2.5,3.5
+BACK_SIZE        32
+BACK_FILTERSIZE  3
+BACKPHOTO_TYPE   LOCAL
+WEIGHT_TYPE      NONE
+PSF_NAME         pass1.psf
+SEEING_FWHM      1.2
+CHECKIMAGE_TYPE  NONE
+VERBOSE_TYPE     QUIET
+STARNNW_NAME     default.nnw
+MAG_ZEROPOINT    21.1
